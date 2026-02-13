@@ -59,6 +59,31 @@ Do not include any text outside the JSON array.
 
 MAX_MARKETS_PER_BATCH = 40  # Keep context manageable for Sonnet
 
+# Categories worth scanning for cross-market mispricings.
+# Sports/Crypto/Entertainment are mostly well-priced partitions within events
+# and don't have the cross-event logical relationships we're looking for.
+HIGH_VALUE_CATEGORIES = {
+    "Economics",
+    "Politics",
+    "Elections",
+    "Financials",
+    "Climate and Weather",
+    "World",
+    "Companies",
+    "Science and Technology",
+    "Science & Technology",
+    "Health",
+}
+
+SKIP_CATEGORIES = {
+    "Sports",
+    "Crypto",
+    "Entertainment",
+    "Mentions",
+    "Social",
+    "test_category",
+}
+
 
 def _get_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
@@ -98,23 +123,62 @@ def _call_llm(markets: list[dict], model: str = SCAN_MODEL) -> list[dict]:
 
     text = response.content[0].text.strip()
 
-    # Extract JSON from the response (handle possible markdown fences)
-    if text.startswith("```"):
-        # Strip markdown code fences
-        lines = text.split("\n")
-        text = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
-        text = text.strip()
-
-    try:
-        relationships = json.loads(text)
-        if not isinstance(relationships, list):
-            logger.warning("LLM returned non-list JSON: %s", type(relationships))
-            return []
+    # Robustly extract JSON array from the response.
+    # Claude sometimes adds commentary before/after the JSON.
+    relationships = _extract_json_array(text)
+    if relationships is not None:
         logger.info("LLM found %d relationships in batch", len(relationships))
         return relationships
-    except json.JSONDecodeError as e:
-        logger.error("Failed to parse LLM response as JSON: %s\nResponse: %s", e, text[:500])
+    else:
+        logger.warning("Could not extract JSON array from LLM response (len=%d)", len(text))
         return []
+
+
+def _extract_json_array(text: str) -> list | None:
+    """Extract a JSON array from LLM output that may contain extra commentary."""
+    import re
+
+    # Strip markdown code fences
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        end = len(lines)
+        for i in range(len(lines) - 1, 0, -1):
+            if lines[i].strip() == "```":
+                end = i
+                break
+        text = "\n".join(lines[1:end]).strip()
+
+    # Try direct parse first
+    try:
+        result = json.loads(text)
+        if isinstance(result, list):
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    # Find the outermost [ ... ] bracket pair
+    start = text.find("[")
+    if start == -1:
+        return None
+
+    # Walk forward to find matching ]
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "[":
+            depth += 1
+        elif text[i] == "]":
+            depth -= 1
+            if depth == 0:
+                try:
+                    result = json.loads(text[start : i + 1])
+                    if isinstance(result, list):
+                        return result
+                except json.JSONDecodeError:
+                    pass
+                break
+
+    return None
 
 
 def _normalise_relationship(raw: dict) -> dict | None:
@@ -202,7 +266,7 @@ def _batch_by_category(markets: list[dict]) -> list[list[dict]]:
     """Group markets by category, chunk large groups."""
     groups: dict[str, list[dict]] = {}
     for m in markets:
-        key = m.get("category") or "__no_category__"
+        key = m.get("_category") or m.get("category") or "__no_category__"
         groups.setdefault(key, []).append(m)
 
     batches = []
@@ -221,6 +285,38 @@ def _batch_by_category(markets: list[dict]) -> list[list[dict]]:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _filter_high_value_markets(markets: list[dict]) -> list[dict]:
+    """Filter markets to only high-value categories using the events table.
+
+    Skips Sports, Crypto, Entertainment, etc. which are mostly well-priced
+    partitions and don't have interesting cross-market mispricings.
+    """
+    # Build event_ticker -> category map
+    with db.get_conn() as conn:
+        with db.get_cursor(conn) as cur:
+            events = db.get_all_events(cur)
+
+    event_categories: dict[str, str] = {}
+    for e in events:
+        e = dict(e)
+        cat = e.get("category") or ""
+        event_categories[e.get("event_ticker", "")] = cat
+
+    filtered = []
+    for m in markets:
+        event_ticker = m.get("event_ticker", "")
+        category = event_categories.get(event_ticker, "")
+        m["_category"] = category  # attach for batching
+        if category in HIGH_VALUE_CATEGORIES:
+            filtered.append(m)
+
+    logger.info(
+        "Category filter: %d / %d markets are high-value (%s skipped)",
+        len(filtered), len(markets), len(markets) - len(filtered),
+    )
+    return filtered
+
+
 def discover_relationships(pass_type: str = "event") -> int:
     """Run relationship discovery and store results.
 
@@ -235,8 +331,13 @@ def discover_relationships(pass_type: str = "event") -> int:
         logger.info("No open markets – skipping relationship discovery")
         return 0
 
-    # Convert RealDictRow to plain dicts
+    # Convert RealDictRow to plain dicts and filter to high-value categories
     markets = [dict(m) for m in markets]
+    markets = _filter_high_value_markets(markets)
+
+    if not markets:
+        logger.info("No high-value markets after filtering – skipping")
+        return 0
 
     if pass_type == "event":
         batches = _batch_by_event(markets)
