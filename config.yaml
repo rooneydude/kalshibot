@@ -1,0 +1,20 @@
+# config.yaml -- Kalshi Mispricing Bot
+# Non-secret trading parameters. Secrets live in environment variables.
+
+trading:
+  dry_run: true                    # SET TO TRUE UNTIL FULLY TESTED
+  max_risk_per_trade_pct: 0.02     # 2% of balance per trade
+  max_daily_loss: 50.00            # Stop trading if daily P&L drops below -$50
+  max_open_positions: 10
+  max_contracts_per_trade: 50
+  min_score_threshold: 0.05        # Minimum magnitude after fees
+  fee_safety_multiplier: 2.0       # Only trade if profit > 2x estimated fees
+
+scanning:
+  full_scan_interval_seconds: 60   # Full market pull every 60s
+  opportunity_recheck_seconds: 15  # Check for violations every 15s
+  relationship_rescan_hours: 24    # Re-run LLM relationship mapping daily
+
+logging:
+  level: INFO
+  file: null                       # Set to "logs/trader.log" for file logging
