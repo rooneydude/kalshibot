@@ -17,6 +17,7 @@ import time
 import base64
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
@@ -80,22 +81,28 @@ class KalshiClient:
 
     # ----- auth helpers -----
 
-    def _sign(self, timestamp_ms: int, method: str, path: str) -> str:
-        """Create the RSA-PSS signature required by Kalshi."""
-        message = f"{timestamp_ms}{method}{path}".encode()
+    def _sign(self, timestamp_ms: int, method: str, full_path: str) -> str:
+        """Create the RSA-PSS signature required by Kalshi.
+
+        *full_path* must be the complete API path (e.g. /trade-api/v2/markets)
+        with query parameters stripped.
+        """
+        # Strip query params from path for signing
+        path_no_query = full_path.split("?")[0]
+        message = f"{timestamp_ms}{method}{path_no_query}".encode("utf-8")
         signature = self._private_key.sign(
             message,
             padding.PSS(
                 mgf=padding.MGF1(hashes.SHA256()),
-                salt_length=padding.PSS.MAX_LENGTH,
+                salt_length=padding.PSS.DIGEST_LENGTH,
             ),
             hashes.SHA256(),
         )
-        return base64.b64encode(signature).decode()
+        return base64.b64encode(signature).decode("utf-8")
 
-    def _auth_headers(self, method: str, path: str) -> dict:
+    def _auth_headers(self, method: str, full_path: str) -> dict:
         ts = int(time.time() * 1000)
-        sig = self._sign(ts, method, path)
+        sig = self._sign(ts, method, full_path)
         return {
             "KALSHI-ACCESS-KEY": self.api_key_id,
             "KALSHI-ACCESS-TIMESTAMP": str(ts),
@@ -114,7 +121,9 @@ class KalshiClient:
         authenticated: bool = True,
     ) -> Any:
         url = f"{self.base_url}{path}"
-        headers = self._auth_headers(method.upper(), path) if authenticated else {
+        # Extract the full path from the URL for signing (e.g. /trade-api/v2/markets)
+        full_path = urlparse(url).path
+        headers = self._auth_headers(method.upper(), full_path) if authenticated else {
             "Content-Type": "application/json"
         }
 
