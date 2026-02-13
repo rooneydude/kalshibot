@@ -341,9 +341,16 @@ def insert_trade(cur, trade: dict) -> int:
     return row["id"] if isinstance(row, dict) else row[0]
 
 
-def get_all_markets(cur, status: str = "open") -> list:
-    """Fetch all markets with the given status."""
-    cur.execute("SELECT * FROM markets WHERE status = %s", (status,))
+def get_all_markets(cur, status: str | None = None) -> list:
+    """Fetch all markets, optionally filtered by status.
+
+    Kalshi uses 'active' (not 'open') for live markets.
+    If *status* is None, returns markets with status 'open' OR 'active'.
+    """
+    if status is None:
+        cur.execute("SELECT * FROM markets WHERE status IN ('open', 'active')")
+    else:
+        cur.execute("SELECT * FROM markets WHERE status = %s", (status,))
     return cur.fetchall()
 
 
@@ -354,13 +361,13 @@ def get_market(cur, ticker: str) -> dict | None:
 
 
 def get_active_relationships(cur) -> list:
-    """Fetch all relationships that reference at least one open market."""
+    """Fetch all relationships that reference at least one active market."""
     cur.execute(
         """
         SELECT r.* FROM relationships r
         WHERE EXISTS (
             SELECT 1 FROM markets m
-            WHERE m.status = 'open'
+            WHERE m.status IN ('open', 'active')
               AND r.tickers LIKE '%%' || m.ticker || '%%'
         )
         """

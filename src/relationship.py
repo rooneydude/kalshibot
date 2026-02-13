@@ -229,7 +229,7 @@ def discover_relationships(pass_type: str = "event") -> int:
     """
     with db.get_conn() as conn:
         with db.get_cursor(conn) as cur:
-            markets = db.get_all_markets(cur, status="open")
+            markets = db.get_all_markets(cur)
 
     if not markets:
         logger.info("No open markets – skipping relationship discovery")
@@ -350,7 +350,7 @@ def cleanup_stale_relationships():
                 for t in tickers:
                     cur.execute("SELECT status FROM markets WHERE ticker = %s", (t,))
                     m = cur.fetchone()
-                    if m and m["status"] == "open":
+                    if m and m["status"] in ("open", "active"):
                         any_open = True
                         break
                 if not any_open:
