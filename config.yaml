@@ -7,13 +7,17 @@ trading:
   max_daily_loss: 50.00            # Stop trading if daily P&L drops below -$50
   max_open_positions: 10
   max_contracts_per_trade: 50
-  min_score_threshold: 0.05        # Minimum magnitude after fees
+  min_score_threshold: 0.50        # Only flag opportunities with score >= 0.50
   fee_safety_multiplier: 2.0       # Only trade if profit > 2x estimated fees
 
 scanning:
   full_scan_interval_seconds: 60   # Full market pull every 60s
   opportunity_recheck_seconds: 15  # Check for violations every 15s
   relationship_rescan_hours: 24    # Re-run LLM relationship mapping daily
+
+alerts:
+  min_score_for_alert: 1.0         # Only send Discord alerts for high-score opps
+  max_alerts_per_minute: 5         # Rate limit Discord webhook
 
 logging:
   level: INFO

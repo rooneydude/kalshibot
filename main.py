@@ -140,6 +140,13 @@ class Orchestrator:
         logger.info("=== Kalshi Mispricing Bot starting ===")
         logger.info("Dry run: %s", self.executor.dry_run)
 
+        # Configure alerts from config
+        alerts_cfg = self.config.get("alerts", {})
+        alerts.configure(
+            max_per_minute=alerts_cfg.get("max_alerts_per_minute", 5),
+            min_score=alerts_cfg.get("min_score_for_alert", 1.0),
+        )
+
         # Init DB
         db.init_db()
 
