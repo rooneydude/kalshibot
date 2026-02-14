@@ -330,4 +330,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import os
+    bot_mode = os.environ.get("BOT_MODE", "mispricing")
+    if bot_mode == "cryptoarb":
+        from cryptoarb.__main__ import main as cryptoarb_main
+        cryptoarb_main()
+    else:
+        main()
