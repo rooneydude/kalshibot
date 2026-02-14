@@ -6,8 +6,12 @@ For each individual crypto contract, checks if:
 
 If so, buying both YES and NO guarantees profit since exactly one
 settles at $1.00.
+
+Optimised for speed: caches the crypto event list and only fetches
+fresh market prices for those events each cycle.
 """
 
+import time
 import logging
 from dataclasses import dataclass
 
@@ -16,6 +20,11 @@ from .fees import taker_fee
 from . import config
 
 logger = logging.getLogger(__name__)
+
+# Cached crypto event tickers -- refreshed every EVENT_REFRESH_SECONDS
+_cached_event_tickers: list[str] = []
+_last_event_refresh: float = 0
+EVENT_REFRESH_SECONDS = 60  # re-discover new events every 60s
 
 
 @dataclass
@@ -32,56 +41,64 @@ class ArbOpportunity:
     profit_cents: float     # profit in cents
 
 
-def scan_contracts(client: KalshiClient) -> list[ArbOpportunity]:
-    """Scan all crypto contracts for YES+NO arbitrage.
+def _refresh_event_list(client: KalshiClient) -> list[str]:
+    """Fetch all events and return just the crypto event tickers."""
+    global _cached_event_tickers, _last_event_refresh
 
-    For each contract:
-        1. Get yes_ask and no_ask
-        2. If both > 0, calculate total cost + fees
-        3. If $1.00 - cost - fees > min_profit, flag it
-
-    Returns profitable ArbOpportunity objects sorted by profit desc.
-    """
-    opportunities: list[ArbOpportunity] = []
-
-    # Fetch all active events
     try:
         all_events = client.get_all_events(status="open")
     except Exception:
-        logger.warning("Failed with status=open, trying status=active")
         try:
             all_events = client.get_all_events(status="active")
         except Exception as e:
             logger.error("Cannot fetch events: %s", e)
-            return []
+            return _cached_event_tickers  # return stale cache
 
-    # Filter to crypto events
-    crypto_events = [
-        e for e in all_events
+    crypto_tickers = [
+        e.get("event_ticker", "")
+        for e in all_events
         if any(e.get("event_ticker", "").startswith(prefix)
                for prefix in config.CRYPTO_EVENT_PREFIXES)
     ]
 
-    logger.info("Scanning %d crypto events (%d total) for YES+NO arb",
-                len(crypto_events), len(all_events))
+    _cached_event_tickers = crypto_tickers
+    _last_event_refresh = time.monotonic()
+    logger.info("Refreshed event list: %d crypto events (%d total)",
+                len(crypto_tickers), len(all_events))
+    return crypto_tickers
 
+
+def scan_contracts(client: KalshiClient) -> list[ArbOpportunity]:
+    """Scan all crypto contracts for YES+NO arbitrage.
+
+    Fast path: only fetches markets for known crypto events.
+    Event list is refreshed every 60 seconds.
+    """
+    global _cached_event_tickers, _last_event_refresh
+
+    # Refresh event list if stale or empty
+    now = time.monotonic()
+    if not _cached_event_tickers or (now - _last_event_refresh) > EVENT_REFRESH_SECONDS:
+        _refresh_event_list(client)
+
+    event_tickers = _cached_event_tickers
+    if not event_tickers:
+        return []
+
+    opportunities: list[ArbOpportunity] = []
     contracts_checked = 0
 
-    for event in crypto_events:
-        evt = event.get("event_ticker", "")
-
-        # Get markets from event data or fetch separately
-        markets = event.get("markets", [])
-        if not markets:
+    # Fetch fresh market prices for each crypto event directly
+    for evt in event_tickers:
+        try:
+            resp = client.get_markets(event_ticker=evt, status="open")
+            markets = resp.get("markets", [])
+        except Exception:
             try:
-                resp = client.get_markets(event_ticker=evt, status="open")
+                resp = client.get_markets(event_ticker=evt, status="active")
                 markets = resp.get("markets", [])
             except Exception:
-                try:
-                    resp = client.get_markets(event_ticker=evt, status="active")
-                    markets = resp.get("markets", [])
-                except Exception:
-                    continue
+                continue
 
         for m in markets:
             ticker = m.get("ticker", "")
@@ -128,7 +145,6 @@ def scan_contracts(client: KalshiClient) -> list[ArbOpportunity]:
         logger.info("Found %d arb opportunities across %d contracts",
                     len(opportunities), contracts_checked)
     else:
-        logger.info("No arb found (%d contracts checked, %d events)",
-                    contracts_checked, len(crypto_events))
+        logger.debug("No arb (%d contracts, %d events)", contracts_checked, len(event_tickers))
 
     return opportunities
