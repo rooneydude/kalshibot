@@ -7,13 +7,15 @@ For each individual crypto contract, checks if:
 If so, buying both YES and NO guarantees profit since exactly one
 settles at $1.00.
 
-Optimised for speed: caches the crypto event list and only fetches
-fresh market prices for those events each cycle.
+Optimised for speed:
+  - Caches the crypto event list (refreshes every 60s)
+  - Fetches market prices for all crypto events in parallel
 """
 
 import time
 import logging
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .kalshi_client import KalshiClient
 from .fees import taker_fee
@@ -25,6 +27,9 @@ logger = logging.getLogger(__name__)
 _cached_event_tickers: list[str] = []
 _last_event_refresh: float = 0
 EVENT_REFRESH_SECONDS = 60  # re-discover new events every 60s
+
+# Thread pool for parallel API calls
+_executor = ThreadPoolExecutor(max_workers=10)
 
 
 @dataclass
@@ -52,7 +57,7 @@ def _refresh_event_list(client: KalshiClient) -> list[str]:
             all_events = client.get_all_events(status="active")
         except Exception as e:
             logger.error("Cannot fetch events: %s", e)
-            return _cached_event_tickers  # return stale cache
+            return _cached_event_tickers
 
     crypto_tickers = [
         e.get("event_ticker", "")
@@ -68,10 +73,23 @@ def _refresh_event_list(client: KalshiClient) -> list[str]:
     return crypto_tickers
 
 
+def _fetch_markets_for_event(client: KalshiClient, evt: str) -> list[dict]:
+    """Fetch markets for a single event (called from thread pool)."""
+    try:
+        resp = client.get_markets(event_ticker=evt, status="open")
+        return resp.get("markets", [])
+    except Exception:
+        try:
+            resp = client.get_markets(event_ticker=evt, status="active")
+            return resp.get("markets", [])
+        except Exception:
+            return []
+
+
 def scan_contracts(client: KalshiClient) -> list[ArbOpportunity]:
     """Scan all crypto contracts for YES+NO arbitrage.
 
-    Fast path: only fetches markets for known crypto events.
+    Fast path: fetches markets for all crypto events in parallel.
     Event list is refreshed every 60 seconds.
     """
     global _cached_event_tickers, _last_event_refresh
@@ -85,21 +103,26 @@ def scan_contracts(client: KalshiClient) -> list[ArbOpportunity]:
     if not event_tickers:
         return []
 
+    # Fetch all crypto markets in parallel
+    all_markets: list[tuple[str, list[dict]]] = []
+    futures = {
+        _executor.submit(_fetch_markets_for_event, client, evt): evt
+        for evt in event_tickers
+    }
+    for future in as_completed(futures):
+        evt = futures[future]
+        try:
+            markets = future.result()
+            if markets:
+                all_markets.append((evt, markets))
+        except Exception as e:
+            logger.warning("Failed to fetch %s: %s", evt, e)
+
+    # Check each contract for YES+NO arb
     opportunities: list[ArbOpportunity] = []
     contracts_checked = 0
 
-    # Fetch fresh market prices for each crypto event directly
-    for evt in event_tickers:
-        try:
-            resp = client.get_markets(event_ticker=evt, status="open")
-            markets = resp.get("markets", [])
-        except Exception:
-            try:
-                resp = client.get_markets(event_ticker=evt, status="active")
-                markets = resp.get("markets", [])
-            except Exception:
-                continue
-
+    for evt, markets in all_markets:
         for m in markets:
             ticker = m.get("ticker", "")
             yes_ask = m.get("yes_ask", 0) or 0
