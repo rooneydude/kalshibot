@@ -25,5 +25,10 @@ POLL_INTERVAL_SECONDS = int(os.environ.get("ARB_POLL_INTERVAL", "1"))
 MAX_CONTRACTS_PER_LEG = int(os.environ.get("ARB_MAX_CONTRACTS", "10"))
 DRY_RUN = os.environ.get("ARB_DRY_RUN", "false").lower() in ("true", "1", "yes")
 
-# Market cache -- background thread refreshes ALL open markets at this interval
-CACHE_REFRESH_SECONDS = int(os.environ.get("ARB_CACHE_REFRESH", "30"))
+# Crypto event ticker prefixes to scan
+CRYPTO_EVENT_PREFIXES = [
+    "KXBTC-", "KXBTCD-",
+    "KXETH-", "KXETHD-",
+    "KXSOL-", "KXSOLD-",
+    "KXXRP-", "KXXRPD-",
+]

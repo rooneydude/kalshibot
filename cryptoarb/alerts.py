@@ -1,5 +1,5 @@
 """
-Discord alerts for the YES+NO arb bot.
+Discord alerts for the crypto arb bot.
 """
 
 import time
@@ -58,7 +58,6 @@ def send_arb_found(opp: ArbOpportunity, contracts: int):
     embed = {
         "title": f"YES+NO ARB: {opp.ticker}",
         "description": (
-            f"**{opp.title}**\n"
             f"**BUY YES** @ ${opp.yes_ask:.2f}\n"
             f"**BUY NO** @ ${opp.no_ask:.2f}\n"
             f"**Total cost:** ${opp.total_cost:.4f}\n"
@@ -69,25 +68,25 @@ def send_arb_found(opp: ArbOpportunity, contracts: int):
         ),
         "color": COLOUR_GREEN,
         "timestamp": _ts(),
-        "footer": {"text": "YES+NO Arb Bot"},
+        "footer": {"text": "Crypto Arb Bot"},
     }
     _send({"embeds": [embed]})
 
 
-def send_scan_summary(markets_cached: int, cache_age_s: float,
+def send_scan_summary(events_scanned: int, contracts_checked: int,
                       opportunities: int, cycle_time_ms: int):
     """Periodic scan summary."""
     embed = {
-        "title": "Arb Scanner Status",
+        "title": "Crypto Arb Scan",
         "description": (
-            f"**Markets cached:** {markets_cached:,}\n"
-            f"**Cache age:** {cache_age_s:.0f}s\n"
-            f"**Total arbs found:** {opportunities}\n"
-            f"**Last cycle:** {cycle_time_ms}ms"
+            f"**Events:** {events_scanned}\n"
+            f"**Contracts checked:** {contracts_checked}\n"
+            f"**Opportunities:** {opportunities}\n"
+            f"**Cycle time:** {cycle_time_ms}ms"
         ),
         "color": COLOUR_BLUE,
         "timestamp": _ts(),
-        "footer": {"text": "YES+NO Arb Bot"},
+        "footer": {"text": "Crypto Arb Bot"},
     }
     _send({"embeds": [embed]})
 
@@ -98,7 +97,7 @@ def send_error(title: str, msg: str):
         "description": f"```\n{msg[:1800]}\n```",
         "color": COLOUR_RED,
         "timestamp": _ts(),
-        "footer": {"text": "YES+NO Arb Bot"},
+        "footer": {"text": "Crypto Arb Bot"},
     }
     _send({"embeds": [embed]})
 
@@ -107,11 +106,10 @@ def send_startup(dry_run: bool, balance: float | None = None):
     bal_text = f"  Balance: ${balance:.2f}" if balance is not None else ""
     mode = "DRY RUN" if dry_run else "LIVE"
     embed = {
-        "title": f"YES+NO Arb Bot Started ({mode})",
+        "title": f"Crypto Arb Bot Started ({mode})",
         "description": (
-            f"Strategy: buy YES + NO on any contract where total < $1 after fees.\n"
-            f"Scanning **all** open markets on Kalshi.\n"
-            f"Cache refresh: {config.CACHE_REFRESH_SECONDS}s\n"
+            f"Strategy: YES+NO arb on individual crypto contracts.\n"
+            f"Scanning {len(config.CRYPTO_EVENT_PREFIXES)} crypto prefixes.\n"
             f"Poll interval: {config.POLL_INTERVAL_SECONDS}s\n"
             f"Min profit: {config.MIN_PROFIT_CENTS}¢\n"
             f"Contracts/trade: {config.MAX_CONTRACTS_PER_LEG}\n"
@@ -119,6 +117,6 @@ def send_startup(dry_run: bool, balance: float | None = None):
         ),
         "color": COLOUR_GOLD,
         "timestamp": _ts(),
-        "footer": {"text": "YES+NO Arb Bot"},
+        "footer": {"text": "Crypto Arb Bot"},
     }
     _send({"embeds": [embed]}, force=True)
