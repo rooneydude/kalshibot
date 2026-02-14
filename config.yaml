@@ -2,7 +2,7 @@
 # Non-secret trading parameters. Secrets live in environment variables.
 
 trading:
-  dry_run: true                    # SET TO TRUE UNTIL FULLY TESTED
+  dry_run: false                   # Live on demo exchange
   max_risk_per_trade_pct: 0.02     # 2% of balance per trade
   max_daily_loss: 50.00            # Stop trading if daily P&L drops below -$50
   max_open_positions: 10
