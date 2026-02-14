@@ -1,7 +1,5 @@
 """
 Discord alerts for the crypto arb bot.
-
-Separate rate limiter from bot #1 to avoid interference.
 """
 
 import time
@@ -37,14 +35,12 @@ def _send(payload: dict, force: bool = False):
     if not url:
         return
     if not force and _rate_limited():
-        logger.debug("Discord rate limit reached, skipping")
         return
     try:
         resp = requests.post(url, json=payload, timeout=10)
         _send_timestamps.append(time.monotonic())
         if resp.status_code == 429:
-            retry_after = resp.json().get("retry_after", 2)
-            time.sleep(min(retry_after, 3))
+            time.sleep(min(resp.json().get("retry_after", 2), 3))
         elif resp.status_code not in (200, 204):
             logger.warning("Discord returned %d", resp.status_code)
     except Exception as e:
@@ -56,21 +52,19 @@ def _ts() -> str:
 
 
 def send_arb_found(opp: ArbOpportunity, contracts: int):
-    """Alert when an arb opportunity is detected and acted upon."""
-    legs_text = "\n".join(
-        f"  BUY YES {m['ticker'][:45]} @ ${m['yes_ask']:.2f}"
-        for m in opp.markets
-    )
-    total_profit = opp.profit_per_set * contracts
+    """Alert when a YES+NO arb is found and executed."""
+    total_profit = opp.profit_per_contract * contracts
 
     embed = {
-        "title": f"PARTITION ARB: {opp.event_ticker}",
+        "title": f"YES+NO ARB: {opp.ticker}",
         "description": (
-            f"**Profit:** {opp.profit_cents:.1f}¢/set x {contracts} = **${total_profit:.2f}**\n"
-            f"**Markets:** {opp.num_markets} legs\n"
-            f"**Total Ask:** ${opp.total_ask:.4f}\n"
-            f"**Total Fees:** ${opp.total_fees:.4f}\n\n"
-            f"**Orders:**\n```\n{legs_text}\n```"
+            f"**BUY YES** @ ${opp.yes_ask:.2f}\n"
+            f"**BUY NO** @ ${opp.no_ask:.2f}\n"
+            f"**Total cost:** ${opp.total_cost:.4f}\n"
+            f"**Fees:** ${opp.total_fees:.4f}\n"
+            f"**Profit/contract:** {opp.profit_cents:.1f}¢\n"
+            f"**Contracts:** {contracts}\n"
+            f"**Total profit:** ${total_profit:.4f}"
         ),
         "color": COLOUR_GREEN,
         "timestamp": _ts(),
@@ -79,12 +73,14 @@ def send_arb_found(opp: ArbOpportunity, contracts: int):
     _send({"embeds": [embed]})
 
 
-def send_scan_summary(events_scanned: int, opportunities: int, cycle_time_ms: int):
+def send_scan_summary(events_scanned: int, contracts_checked: int,
+                      opportunities: int, cycle_time_ms: int):
     """Periodic scan summary."""
     embed = {
         "title": "Crypto Arb Scan",
         "description": (
-            f"**Events scanned:** {events_scanned}\n"
+            f"**Events:** {events_scanned}\n"
+            f"**Contracts checked:** {contracts_checked}\n"
             f"**Opportunities:** {opportunities}\n"
             f"**Cycle time:** {cycle_time_ms}ms"
         ),
@@ -112,10 +108,11 @@ def send_startup(dry_run: bool, balance: float | None = None):
     embed = {
         "title": f"Crypto Arb Bot Started ({mode})",
         "description": (
-            f"Scanning crypto partitions on Kalshi LIVE API.\n"
+            f"Strategy: YES+NO arb on individual crypto contracts.\n"
+            f"Scanning {len(config.CRYPTO_EVENT_PREFIXES)} crypto prefixes.\n"
             f"Poll interval: {config.POLL_INTERVAL_SECONDS}s\n"
             f"Min profit: {config.MIN_PROFIT_CENTS}¢\n"
-            f"Contracts/leg: {config.MAX_CONTRACTS_PER_LEG}\n"
+            f"Contracts/trade: {config.MAX_CONTRACTS_PER_LEG}\n"
             f"{bal_text}"
         ),
         "color": COLOUR_GOLD,

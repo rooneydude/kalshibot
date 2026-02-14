@@ -1,5 +1,5 @@
 """
-Main entry point for the crypto partition arbitrage bot.
+Main entry point for the crypto YES+NO arbitrage bot.
 
 Usage:  python -m cryptoarb
 """
@@ -11,7 +11,7 @@ import sys
 
 from . import config
 from .kalshi_client import KalshiClient
-from .scanner import scan_partitions
+from .scanner import scan_contracts
 from .executor import execute_arb
 from . import alerts, db
 
@@ -38,11 +38,11 @@ signal.signal(signal.SIGINT, _shutdown)
 def main():
     global running
 
-    logger.info("=== Crypto Partition Arb Bot starting ===")
+    logger.info("=== Crypto YES+NO Arb Bot starting ===")
     logger.info("Base URL: %s", config.KALSHI_BASE_URL)
     logger.info("Dry run: %s", config.DRY_RUN)
     logger.info("Min profit: %d¢", config.MIN_PROFIT_CENTS)
-    logger.info("Contracts/leg: %d", config.MAX_CONTRACTS_PER_LEG)
+    logger.info("Contracts/trade: %d", config.MAX_CONTRACTS_PER_LEG)
     logger.info("Poll interval: %ds", config.POLL_INTERVAL_SECONDS)
 
     # Init
@@ -53,7 +53,7 @@ def main():
     balance = None
     try:
         bal_data = client.get_balance()
-        balance = bal_data.get("balance", 0) / 100.0  # cents -> dollars
+        balance = bal_data.get("balance", 0) / 100.0
         logger.info("Account balance: $%.2f", balance)
     except Exception as e:
         logger.warning("Could not fetch balance: %s", e)
@@ -61,29 +61,34 @@ def main():
     alerts.send_startup(dry_run=config.DRY_RUN, balance=balance)
 
     scan_count = 0
+    total_arbs = 0
 
     while running:
         cycle_start = time.monotonic()
 
         try:
-            opportunities = scan_partitions(client)
+            opportunities = scan_contracts(client)
             scan_count += 1
 
             for opp in opportunities:
                 execute_arb(client, opp)
                 alerts.send_arb_found(opp, config.MAX_CONTRACTS_PER_LEG)
+                total_arbs += 1
 
-            # Send summary every 10 cycles
             cycle_ms = int((time.monotonic() - cycle_start) * 1000)
-            if scan_count % 10 == 0:
+
+            # Log every cycle
+            logger.info("Cycle %d: %dms, %d arbs found (total: %d)",
+                        scan_count, cycle_ms, len(opportunities), total_arbs)
+
+            # Discord summary every 50 cycles
+            if scan_count % 50 == 0:
                 alerts.send_scan_summary(
                     events_scanned=scan_count,
-                    opportunities=len(opportunities),
+                    contracts_checked=0,  # logged by scanner
+                    opportunities=total_arbs,
                     cycle_time_ms=cycle_ms,
                 )
-
-            logger.info("Cycle %d complete in %dms, %d opportunities",
-                        scan_count, cycle_ms, len(opportunities))
 
         except Exception as e:
             logger.error("Scan cycle failed: %s", e, exc_info=True)
@@ -95,7 +100,7 @@ def main():
         if sleep_time > 0 and running:
             time.sleep(sleep_time)
 
-    logger.info("Crypto Arb Bot shutting down")
+    logger.info("Crypto Arb Bot shutting down (total arbs: %d)", total_arbs)
 
 
 if __name__ == "__main__":

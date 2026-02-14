@@ -94,17 +94,18 @@ def log_scan(event_ticker: str, num_markets: int, total_ask: float,
             return cur.fetchone()[0]
 
 
-def log_trade(scan_id: int, event_ticker: str, ticker: str, price: float,
-              count: int, order_id: str, order_status: str, fees: float) -> int:
-    """Log an individual trade leg."""
+def log_trade(scan_id: int, event_ticker: str, ticker: str, side: str,
+              price: float, count: int, order_id: str, order_status: str,
+              fees: float) -> int:
+    """Log an individual trade leg (YES or NO)."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO arb_trades
                     (scan_id, event_ticker, ticker, side, action, price, count, order_id, order_status, fees)
-                VALUES (%s, %s, %s, 'yes', 'buy', %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, 'buy', %s, %s, %s, %s, %s)
                 RETURNING id
-            """, (scan_id, event_ticker, ticker, price, count, order_id, order_status, fees))
+            """, (scan_id, event_ticker, ticker, side, price, count, order_id, order_status, fees))
             return cur.fetchone()[0]
 
 

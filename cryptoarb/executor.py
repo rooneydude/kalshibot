@@ -1,5 +1,5 @@
 """
-Executor -- places buy-YES orders on all legs of a profitable partition.
+Executor -- buys YES and NO on a single contract for guaranteed arb profit.
 """
 
 import time
@@ -14,75 +14,111 @@ logger = logging.getLogger(__name__)
 
 
 def execute_arb(client: KalshiClient, opp: ArbOpportunity) -> bool:
-    """Buy YES on every leg of the partition.
+    """Buy YES and NO on a single contract.
 
-    Places limit orders at the current ask price for each market.
-    Logs everything to the arb_trades table.
-
-    Returns True if all orders were placed successfully.
+    Places limit orders at the current ask price for both sides.
+    Returns True if both orders were placed successfully.
     """
     count = config.MAX_CONTRACTS_PER_LEG
     dry_run = config.DRY_RUN
 
+    total_fees = (taker_fee(count, opp.yes_ask) + taker_fee(count, opp.no_ask))
+    total_profit = opp.profit_per_contract * count
+
     # Log the scan
     scan_id = db.log_scan(
         event_ticker=opp.event_ticker,
-        num_markets=opp.num_markets,
-        total_ask=opp.total_ask,
-        total_fees=opp.total_fees,
+        num_markets=1,
+        total_ask=opp.total_cost,
+        total_fees=total_fees,
         profit_cents=opp.profit_cents,
         acted=True,
     )
 
-    all_success = True
-    orders_placed = []
+    success = True
 
-    for leg in opp.markets:
-        ticker = leg["ticker"]
-        price = leg["yes_ask"]
-        price_cents = int(round(price * 100))
-        fee = taker_fee(count, price)
+    # Leg 1: Buy YES
+    yes_price_cents = int(round(opp.yes_ask * 100))
+    if dry_run:
+        yes_order_id = f"DRY-YES-{int(time.time() * 1000)}"
+        yes_status = "dry_run"
+        logger.info("[DRY RUN] BUY %d YES %s @ $%.2f", count, opp.ticker, opp.yes_ask)
+    else:
+        try:
+            result = client.place_order(
+                ticker=opp.ticker,
+                action="buy",
+                side="yes",
+                order_type="limit",
+                count=count,
+                yes_price=yes_price_cents,
+            )
+            yes_order_id = result.get("order", {}).get("order_id", "unknown")
+            yes_status = result.get("order", {}).get("status", "placed")
+            logger.info("YES ORDER: BUY %d %s @ $%.2f -> %s",
+                        count, opp.ticker, opp.yes_ask, yes_order_id)
+        except Exception as e:
+            logger.error("FAILED YES order for %s: %s", opp.ticker, e)
+            yes_order_id = "FAILED"
+            yes_status = f"error: {e}"
+            success = False
 
-        if dry_run:
-            order_id = f"DRY-{int(time.time() * 1000)}"
-            order_status = "dry_run"
-            logger.info("[DRY RUN] BUY %d YES %s @ $%.2f (fee=$%.2f)",
-                        count, ticker, price, fee)
-        else:
-            try:
-                result = client.place_order(
-                    ticker=ticker,
-                    action="buy",
-                    side="yes",
-                    order_type="limit",
-                    count=count,
-                    yes_price=price_cents,
-                )
-                order_id = result.get("order", {}).get("order_id", "unknown")
-                order_status = result.get("order", {}).get("status", "placed")
-                orders_placed.append(order_id)
-                logger.info("ORDER PLACED: BUY %d YES %s @ $%.2f -> %s (%s)",
-                            count, ticker, price, order_id, order_status)
-            except Exception as e:
-                logger.error("FAILED to place order for %s: %s", ticker, e)
-                order_id = "FAILED"
-                order_status = f"error: {e}"
-                all_success = False
+    db.log_trade(
+        scan_id=scan_id,
+        event_ticker=opp.event_ticker,
+        ticker=opp.ticker,
+        side="yes",
+        price=opp.yes_ask,
+        count=count,
+        order_id=yes_order_id,
+        order_status=yes_status,
+        fees=taker_fee(count, opp.yes_ask),
+    )
 
-        db.log_trade(
-            scan_id=scan_id,
-            event_ticker=opp.event_ticker,
-            ticker=ticker,
-            price=price,
-            count=count,
-            order_id=order_id,
-            order_status=order_status,
-            fees=fee,
-        )
+    # Leg 2: Buy NO
+    # For NO orders, Kalshi uses yes_price to represent the complement:
+    # buying NO at no_ask means setting yes_price = 100 - no_ask_cents
+    no_price_cents = int(round(opp.no_ask * 100))
+    no_yes_price = 100 - no_price_cents  # Kalshi's NO pricing convention
 
-    if not dry_run and all_success:
-        logger.info("All %d orders placed for %s (profit=%.1f¢ x %d contracts = $%.4f)",
-                     opp.num_markets, opp.event_ticker, opp.profit_cents,
-                     count, opp.profit_per_set * count)
+    if dry_run:
+        no_order_id = f"DRY-NO-{int(time.time() * 1000)}"
+        no_status = "dry_run"
+        logger.info("[DRY RUN] BUY %d NO %s @ $%.2f", count, opp.ticker, opp.no_ask)
+    else:
+        try:
+            result = client.place_order(
+                ticker=opp.ticker,
+                action="buy",
+                side="no",
+                order_type="limit",
+                count=count,
+                yes_price=no_yes_price,
+            )
+            no_order_id = result.get("order", {}).get("order_id", "unknown")
+            no_status = result.get("order", {}).get("status", "placed")
+            logger.info("NO ORDER: BUY %d NO %s @ $%.2f -> %s",
+                        count, opp.ticker, opp.no_ask, no_order_id)
+        except Exception as e:
+            logger.error("FAILED NO order for %s: %s", opp.ticker, e)
+            no_order_id = "FAILED"
+            no_status = f"error: {e}"
+            success = False
 
-    return all_success
+    db.log_trade(
+        scan_id=scan_id,
+        event_ticker=opp.event_ticker,
+        ticker=opp.ticker,
+        side="no",
+        price=opp.no_ask,
+        count=count,
+        order_id=no_order_id,
+        order_status=no_status,
+        fees=taker_fee(count, opp.no_ask),
+    )
+
+    if success and not dry_run:
+        logger.info("ARB EXECUTED: %s  profit=%.1f¢ x %d = $%.4f",
+                     opp.ticker, opp.profit_cents, count, total_profit)
+
+    return success
