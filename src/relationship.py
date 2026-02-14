@@ -116,7 +116,7 @@ def _call_llm(markets: list[dict], model: str = SCAN_MODEL) -> list[dict]:
 
     response = client.messages.create(
         model=model,
-        max_tokens=4096,
+        max_tokens=8192,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
     )
@@ -253,13 +253,22 @@ def _normalise_relationship(raw: dict) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _batch_by_event(markets: list[dict]) -> list[list[dict]]:
-    """Group markets by event_ticker."""
+    """Group markets by event_ticker, chunking large groups."""
     groups: dict[str, list[dict]] = {}
     for m in markets:
         key = m.get("event_ticker") or "__no_event__"
         groups.setdefault(key, []).append(m)
-    # Only send groups with 2+ markets (single markets can't have internal relationships)
-    return [g for g in groups.values() if len(g) >= 2]
+
+    batches = []
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        # Chunk large event groups to avoid overwhelming the LLM
+        for i in range(0, len(group), MAX_MARKETS_PER_BATCH):
+            chunk = group[i : i + MAX_MARKETS_PER_BATCH]
+            if len(chunk) >= 2:
+                batches.append(chunk)
+    return batches
 
 
 def _batch_by_category(markets: list[dict]) -> list[list[dict]]:
