@@ -1,5 +1,5 @@
 """
-Configuration for the crypto partition arbitrage bot.
+Configuration for the YES+NO partition arbitrage bot.
 
 All secrets come from environment variables (prefixed LIVE_KALSHI_*).
 """
@@ -21,14 +21,9 @@ DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 # Trading parameters
 MIN_PROFIT_CENTS = int(os.environ.get("ARB_MIN_PROFIT_CENTS", "2"))
-POLL_INTERVAL_SECONDS = int(os.environ.get("ARB_POLL_INTERVAL", "5"))
+POLL_INTERVAL_SECONDS = int(os.environ.get("ARB_POLL_INTERVAL", "1"))
 MAX_CONTRACTS_PER_LEG = int(os.environ.get("ARB_MAX_CONTRACTS", "10"))
 DRY_RUN = os.environ.get("ARB_DRY_RUN", "false").lower() in ("true", "1", "yes")
 
-# Crypto event ticker prefixes to scan (partition markets)
-CRYPTO_EVENT_PREFIXES = [
-    "KXBTC-", "KXBTCD-",
-    "KXETH-", "KXETHD-",
-    "KXSOL-", "KXSOLD-",
-    "KXXRP-", "KXXRPD-",
-]
+# Market cache -- background thread refreshes ALL open markets at this interval
+CACHE_REFRESH_SECONDS = int(os.environ.get("ARB_CACHE_REFRESH", "30"))

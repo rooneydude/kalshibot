@@ -9,6 +9,7 @@ import os
 import time
 import base64
 import logging
+import threading
 from typing import Any
 from urllib.parse import urlparse
 
@@ -22,24 +23,27 @@ logger = logging.getLogger(__name__)
 
 
 class _RateLimiter:
-    """Simple token-bucket rate limiter (10 req/s)."""
+    """Thread-safe token-bucket rate limiter (10 req/s)."""
 
     def __init__(self, rate: float = 10.0):
         self._rate = rate
         self._tokens = rate
         self._last = time.monotonic()
+        self._lock = threading.Lock()
 
     def acquire(self):
-        now = time.monotonic()
-        elapsed = now - self._last
-        self._tokens = min(self._rate, self._tokens + elapsed * self._rate)
-        self._last = now
-        if self._tokens < 1:
-            sleep_time = (1 - self._tokens) / self._rate
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last
+            self._tokens = min(self._rate, self._tokens + elapsed * self._rate)
+            self._last = now
+            if self._tokens < 1:
+                sleep_time = (1 - self._tokens) / self._rate
+            else:
+                self._tokens -= 1
+                sleep_time = 0
+        if sleep_time > 0:
             time.sleep(sleep_time)
-            self._tokens = 0
-        else:
-            self._tokens -= 1
 
 
 class KalshiClient:
@@ -170,6 +174,19 @@ class KalshiClient:
         if cursor:
             params["cursor"] = cursor
         return self._request("GET", "/markets", params=params)
+
+    def get_all_markets(self, status: str = "open") -> list[dict]:
+        """Paginate through all markets and return a flat list."""
+        all_markets: list[dict] = []
+        cursor = None
+        while True:
+            data = self.get_markets(status=status, limit=200, cursor=cursor)
+            markets = data.get("markets", [])
+            all_markets.extend(markets)
+            cursor = data.get("cursor")
+            if not cursor or not markets:
+                break
+        return all_markets
 
     def get_orderbook(self, ticker: str) -> dict:
         return self._request("GET", f"/markets/{ticker}/orderbook")
